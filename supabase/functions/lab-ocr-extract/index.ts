@@ -1,4 +1,3 @@
-
 // Enable XHR for OpenAI vision/file fetch support
 import "https://deno.land/x/xhr@0.1.0/mod.ts"
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
@@ -78,7 +77,6 @@ serve(async (req) => {
     let json: any = [];
     try {
       let clean = aiContent;
-
       // Remove '```json' or '```' with or without spaces, at start and end
       clean = clean.replace(/```json\s*|```/gi, '');
       clean = clean.trim();
@@ -93,9 +91,16 @@ serve(async (req) => {
 
       // Final trim and parse
       json = JSON.parse(clean);
-    } catch (e) {
-      // Include the AI output in the error for debugging
-      return new Response(JSON.stringify({ error: "Could not parse AI output", aiContent }), { status: 500, headers: corsHeaders });
+    } catch (err) {
+      // Always include the raw AI output AND error
+      return new Response(
+        JSON.stringify({
+          error: "Could not parse AI output",
+          aiContent,
+          parseError: (err as Error).message || String(err)
+        }),
+        { status: 500, headers: corsHeaders }
+      );
     }
 
     // Sanity: array of lab tests, insert into lab_results
@@ -124,9 +129,11 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    // Sharp error, log more context
-    console.error('Error in lab-ocr-extract:', error);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
+    // Improved error: always provide .aiContent if present
+    const aiContent = (error && typeof error === "object" && "aiContent" in error) ? (error as any).aiContent : undefined;
+    return new Response(JSON.stringify({
+      error: (error as Error).message,
+      aiContent
+    }), { status: 500, headers: corsHeaders });
   }
 });
-

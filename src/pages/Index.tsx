@@ -131,11 +131,24 @@ const Index = () => {
       const ocrResult = await ocrRes.json();
 
       if (!ocrRes.ok || ocrResult.error) {
-        throw new Error("OCR failed: " + (ocrResult.error || ""));
+        // Surface full error and any AI output in toast
+        let toastDescription = ocrResult.error
+          ? `${ocrResult.error}${ocrResult.parseError ? ` (${ocrResult.parseError})` : ''}`
+          : "Unknown error";
+        if (ocrResult.aiContent !== undefined && ocrResult.aiContent !== "") {
+          toastDescription += "\n— Raw AI Output —\n" + ocrResult.aiContent;
+        }
+        toast({
+          title: "OCR/AI Analysis failed",
+          description: toastDescription,
+        });
+        setIsUploading(false);
+        return;
       }
 
       toast({ title: "AI Lab Results Extracted!", description: `${ocrResult.extracted} results found.` });
     } catch (err: any) {
+      // Fallback catch (shouldn't trigger in most cases)
       toast({ title: "OCR/AI Analysis failed", description: err?.message ?? String(err) });
     }
 
