@@ -30,7 +30,6 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: 'OpenAI API key not set' }), { status: 500, headers: corsHeaders });
     }
 
-    // New: Use a stricter and more explicit prompt
     const prompt = `
   You are a medical assistant AI. An image or PDF of a lab report has been uploaded.
   Extract all test results clearly and convert them into a valid JSON array in the format below:
@@ -53,7 +52,7 @@ serve(async (req) => {
   - Do NOT output any formatting, explanation, or prose—JSON only, one array, one line.
 `;
 
-    // Call OpenAI Vision (gpt-4o, image/file tool)
+    // Call OpenAI Vision API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -77,19 +76,19 @@ serve(async (req) => {
     const aiContent = data?.choices?.[0]?.message?.content ?? "";
     console.log("Raw AI output:", aiContent);
 
-    // More robust parsing logic
+    // Robust parsing logic: always return aiContent (even on errors)
     let json: any = [];
+    let parseError: string | null = null;
     try {
       let clean = aiContent || "";
       clean = clean.replace(/```json\s*|```/gi, '').trim();
-      // Look for the first '[' and last ']'
       const firstBracket = clean.indexOf('[');
       const lastBracket = clean.lastIndexOf(']');
       if (firstBracket === -1 || lastBracket === -1 || firstBracket >= lastBracket) {
-        // If the model returns truly nothing, fallback to []
         if (!clean || clean === "") {
           json = [];
         } else {
+          // try fallback: parse as empty array; save parse error
           throw new Error("Could not locate JSON array in output.");
         }
       } else {
@@ -97,18 +96,39 @@ serve(async (req) => {
         json = JSON.parse(clean);
       }
     } catch (err) {
+      parseError = (err as Error).message || String(err);
+      json = [];
+    }
+
+    // If still no valid lab results, log and insert a fallback dummy row
+    let insertErrors: string[] = [];
+    if (!Array.isArray(json) || json.length === 0) {
+      // Insert a fallback "no results" entry for user feedback
+      const { error } = await supabaseClient.from("lab_results").insert({
+        file_id,
+        test_name: "No readable lab results found.",
+        value: null,
+        unit: "",
+        normal_range: "",
+        status: "",
+        severity: "",
+        explanation: aiContent ? "OCR/AI could not extract valid lab test data from this file." : "No text returned from AI at all.",
+        recommendations: null,
+      });
+      if (error) insertErrors.push(error.message);
       return new Response(
         JSON.stringify({
-          error: "Could not parse AI output",
+          extracted: 0,
           aiContent,
-          parseError: (err as Error).message || String(err)
+          parse_debug: "No results extracted; check aiContent for what AI returned.",
+          parseError,
+          insert_errors: insertErrors,
         }),
-        { status: 500, headers: corsHeaders }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Insert into lab_results table (new schema with new fields)
-    let insertErrors = [];
+    // Normal data insertion
     for (const r of json) {
       const { error } = await supabaseClient.from("lab_results").insert({
         file_id,
@@ -124,19 +144,6 @@ serve(async (req) => {
       if (error) insertErrors.push(error.message);
     }
 
-    // If zero results, include aiContent in the response for debugging
-    if (json.length === 0) {
-      return new Response(
-        JSON.stringify({
-          extracted: 0,
-          aiContent,
-          parse_debug: "No results extracted; check aiContent for what AI returned.",
-          insert_errors: insertErrors,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     return new Response(
       JSON.stringify({
         extracted: json.length,
@@ -146,10 +153,19 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    const aiContent = (error && typeof error === "object" && "aiContent" in error) ? (error as any).aiContent : undefined;
+    // Ensure error responses always include full context
+    let aiContent = undefined;
+    let parseError = undefined;
+    if (typeof error === "object" && error !== null) {
+      if ("aiContent" in error) aiContent = (error as any).aiContent;
+      if ("parseError" in error) parseError = (error as any).parseError;
+    }
     return new Response(JSON.stringify({
       error: (error as Error).message,
-      aiContent
+      aiContent,
+      parseError
     }), { status: 500, headers: corsHeaders });
   }
 });
+
+// end of file
