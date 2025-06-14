@@ -7,6 +7,7 @@ import { Progress } from '@/components/ui/progress';
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
+import UploadedFileWithResults from '@/components/UploadedFileWithResults';
 
 interface LabResult {
   testName: string;
@@ -27,11 +28,34 @@ const Index = () => {
   const [results, setResults] = useState<LabResult[]>([]);
   const [showResults, setShowResults] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ id: string, file_name: string, file_url: string, uploaded_at: string | null }>>([]);
+  const [filesWithResults, setFilesWithResults] = useState<
+    Array<{ file: any; labResults: any[] }>
+  >([]);
 
   useEffect(() => {
-    // On mount, load the uploaded files from Supabase
     fetchFiles();
   }, []);
+
+  useEffect(() => {
+    // After files fetched, load lab results per file
+    (async () => {
+      if (uploadedFiles.length > 0) {
+        const { data: allResults } = await supabase
+          .from("lab_results")
+          .select("*");
+        const joined = uploadedFiles.map((file) => ({
+          file,
+          labResults: (allResults || []).filter(
+            (r) => r.file_id === file.id
+          ),
+        }));
+        setFilesWithResults(joined);
+      } else {
+        setFilesWithResults([]);
+      }
+    })();
+    // eslint-disable-next-line
+  }, [uploadedFiles]);
 
   const fetchFiles = async () => {
     const { data, error } = await supabase
@@ -180,33 +204,6 @@ const Index = () => {
           </p>
         </div>
 
-        {/* --- UPLOADED FILES LIST (show after the header, always) --- */}
-        <div className="max-w-2xl mx-auto mb-8">
-          <h2 className="text-xl font-bold mb-4">Uploaded Reports</h2>
-          <div className="space-y-2">
-            {uploadedFiles.length === 0 ? (
-              <p className="text-gray-500">No uploaded reports yet.</p>
-            ) : (
-              uploadedFiles.map((file) => (
-                <div key={file.id} className="flex justify-between items-center bg-white rounded p-3 shadow-md mb-2">
-                  <span className="truncate max-w-xs">{file.file_name}</span>
-                  <a
-                    href={file.file_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 underline text-sm ml-2"
-                  >
-                    View
-                  </a>
-                  <span className="text-xs text-gray-400 ml-4">
-                    {file.uploaded_at ? new Date(file.uploaded_at).toLocaleString() : ""}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
         {/* --- UPLOAD SECTION --- */}
         <div className="max-w-2xl mx-auto">
           <Card className="mb-8 shadow-lg border-0">
@@ -246,6 +243,52 @@ const Index = () => {
             </CardContent>
           </Card>
         </div>
+
+        {/* --- FILES + LAB RESULTS HISTORY --- */}
+        <div className="max-w-4xl mx-auto mb-12">
+          <h2 className="text-xl font-bold mb-5">All Your Uploaded Reports & Analysis</h2>
+          <div>
+            {filesWithResults.length === 0 ? (
+              <p className="text-gray-500">No uploaded reports yet.</p>
+            ) : (
+              filesWithResults.map(({ file, labResults }) => (
+                <UploadedFileWithResults
+                  key={file.id}
+                  file={file}
+                  labResults={labResults}
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* --- UPLOADED FILES LIST (show after the header, always) --- */}
+        <div className="max-w-2xl mx-auto mb-8">
+          <h2 className="text-xl font-bold mb-4">Uploaded Reports</h2>
+          <div className="space-y-2">
+            {uploadedFiles.length === 0 ? (
+              <p className="text-gray-500">No uploaded reports yet.</p>
+            ) : (
+              uploadedFiles.map((file) => (
+                <div key={file.id} className="flex justify-between items-center bg-white rounded p-3 shadow-md mb-2">
+                  <span className="truncate max-w-xs">{file.file_name}</span>
+                  <a
+                    href={file.file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 underline text-sm ml-2"
+                  >
+                    View
+                  </a>
+                  <span className="text-xs text-gray-400 ml-4">
+                    {file.uploaded_at ? new Date(file.uploaded_at).toLocaleString() : ""}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
         {!showResults ? (
           <div className="max-w-2xl mx-auto">
             {/* Features Section */}
