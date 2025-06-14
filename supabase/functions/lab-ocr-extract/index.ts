@@ -1,4 +1,3 @@
-
 // Enable XHR for OpenAI vision/file fetch support
 import "https://deno.land/x/xhr@0.1.0/mod.ts"
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
@@ -125,6 +124,19 @@ serve(async (req) => {
       if (error) insertErrors.push(error.message);
     }
 
+    // If zero results, include aiContent in the response for debugging
+    if (json.length === 0) {
+      return new Response(
+        JSON.stringify({
+          extracted: 0,
+          aiContent,
+          parse_debug: "No results extracted; check aiContent for what AI returned.",
+          insert_errors: insertErrors,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     return new Response(
       JSON.stringify({
         extracted: json.length,
@@ -141,4 +153,3 @@ serve(async (req) => {
     }), { status: 500, headers: corsHeaders });
   }
 });
-
