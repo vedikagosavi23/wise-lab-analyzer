@@ -1,4 +1,3 @@
-
 import "https://deno.land/x/xhr@0.1.0/mod.ts"
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
@@ -30,7 +29,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: 'OpenAI API key not set' }), { status: 500, headers: corsHeaders });
     }
 
-    // Enhanced prompt: force output of fields AND explanations in plain language for each test
+    // 1. Extract detailed lab results as before
     const prompt = `
 Extract all lab test result values from the uploaded report, returning ONLY a JSON array of objects as below, each with a concise layman explanation and recommendations:
 
@@ -58,7 +57,7 @@ Instructions:
 - Again, return only the pure JSON array as described above—absolutely no extra text or formatting.
 `;
 
-    // Call OpenAI Vision API with strict JSON output requirement.
+    // Call OpenAI Vision API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -104,6 +103,8 @@ Instructions:
 
     // Fallback for empty/blank/format errors
     let insertErrors: string[] = [];
+    let summaryText: string = "";
+
     if (!Array.isArray(json) || json.length === 0) {
       // Insert a fallback "no results" entry for user feedback
       const { error } = await supabaseClient.from("lab_results").insert({
@@ -118,10 +119,18 @@ Instructions:
         recommendations: null,
       });
       if (error) insertErrors.push(error.message);
+      // Generate a summary even for empty/no-results reports
+      summaryText = aiContent && `${aiContent}`.trim() !== "" ? "No extractable results. The report could not be interpreted by AI." : "No summary available.";
+      // Save summary to uploaded_files
+      await supabaseClient
+        .from("uploaded_files")
+        .update({ summary: summaryText })
+        .eq("id", file_id);
       return new Response(
         JSON.stringify({
           extracted: 0,
           aiContent,
+          summary: summaryText,
           parse_debug: "No results extracted; check aiContent for AI's raw output.",
           parseError,
           insert_errors: insertErrors,
@@ -130,7 +139,7 @@ Instructions:
       );
     }
 
-    // Insert all extracted results
+    // 2. Insert all extracted results as before
     for (const r of json) {
       const { error } = await supabaseClient.from("lab_results").insert({
         file_id,
@@ -146,10 +155,50 @@ Instructions:
       if (error) insertErrors.push(error.message);
     }
 
+    // 3. Generate a summary for the whole report via OpenAI
+    // Use only the extracted array, send back for summarization
+    let summaryPrompt = `
+Given the following patient lab test results:
+${JSON.stringify(json, null, 2)}
+
+Write a single, concise summary for the patient in plain language that gives an overview of the results, highlights anything abnormal or important, and reassures them as appropriate. Do not include individual test value tables. If most results are normal, say so simply. If any results are abnormal or critical, describe the concern in simple, reassuring wording. DO NOT provide medical advice, just general, understandable guidance. Use 2-5 sentences.`;
+    let summaryResponse, summaryData, summaryTextRaw;
+
+    try {
+      summaryResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${openAIApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [
+            { role: "system", content: "You're a kind and knowledgeable medical AI. Write only a plain-language summary of the lab results, as if explaining to a patient, in 2-5 sentences." },
+            { role: "user", content: summaryPrompt }
+          ],
+          max_tokens: 350,
+          temperature: 0.2,
+        })
+      });
+      summaryData = await summaryResponse.json();
+      summaryTextRaw = summaryData?.choices?.[0]?.message?.content?.trim() || "";
+      summaryText = summaryTextRaw.replace(/^\s*["']?|\s*["']?$/g, ""); // Remove wrapping quotes if present
+
+      // Save the summary into the uploaded_files row
+      await supabaseClient
+        .from("uploaded_files")
+        .update({ summary: summaryText })
+        .eq("id", file_id);
+    } catch (err) {
+      summaryText = "";
+    }
+
     return new Response(
       JSON.stringify({
         extracted: json.length,
         aiContent,
+        summary: summaryText,
         insert_errors: insertErrors,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

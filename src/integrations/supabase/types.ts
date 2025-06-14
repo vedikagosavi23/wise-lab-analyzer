@@ -64,6 +64,7 @@ export type Database = {
           file_name: string
           file_url: string
           id: string
+          summary: string | null
           uploaded_at: string | null
           user_id: string | null
         }
@@ -71,6 +72,7 @@ export type Database = {
           file_name: string
           file_url: string
           id?: string
+          summary?: string | null
           uploaded_at?: string | null
           user_id?: string | null
         }
@@ -78,6 +80,7 @@ export type Database = {
           file_name?: string
           file_url?: string
           id?: string
+          summary?: string | null
           uploaded_at?: string | null
           user_id?: string | null
         }

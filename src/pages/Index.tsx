@@ -37,13 +37,18 @@ const Index = () => {
   }, []);
 
   useEffect(() => {
-    // After files fetched, load lab results per file
+    // After files fetched, load lab results per file (now, include summary)
     (async () => {
       if (uploadedFiles.length > 0) {
         const { data: allResults } = await supabase
           .from("lab_results")
           .select("*");
-        const joined = uploadedFiles.map((file) => ({
+        // Fetch files again to get the updated summary field
+        const { data: latestFiles } = await supabase
+          .from("uploaded_files")
+          .select("*")
+          .order("uploaded_at", { ascending: false });
+        const joined = (latestFiles || []).map((file) => ({
           file,
           labResults: (allResults || []).filter(
             (r) => r.file_id === file.id

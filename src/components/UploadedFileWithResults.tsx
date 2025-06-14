@@ -1,4 +1,3 @@
-
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +24,7 @@ export interface UploadedFile {
 }
 
 interface UploadedFileWithResultsProps {
-  file: UploadedFile;
+  file: UploadedFile & { summary?: string | null };
   labResults: LabResult[];
 }
 
@@ -76,6 +75,13 @@ const UploadedFileWithResults: React.FC<UploadedFileWithResultsProps> = ({ file,
         </CardTitle>
       </CardHeader>
       <CardContent>
+        {/* --- SUMMARY goes here --- */}
+        {file.summary && (
+          <div className="bg-blue-50 border-l-4 border-blue-300 rounded p-4 mb-4 text-blue-900 text-base font-medium shadow">
+            {file.summary}
+          </div>
+        )}
+        {/* LAB RESULTS */}
         {labResults.length > 0 ? (
           <Table>
             <TableHeader>
