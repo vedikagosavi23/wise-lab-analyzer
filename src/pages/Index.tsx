@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Upload, FileText, Brain, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { Upload, FileText, Brain, AlertTriangle, CheckCircle, XCircle, Delete } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -195,6 +195,48 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
   await fetchFiles(); // reload files + results
 };
 
+  // --- NEW: Delete file handler ---
+  const handleDeleteFile = async (fileId: string, storagePath: string | null) => {
+    if (!window.confirm("Are you sure you want to delete this report? This cannot be undone.")) return;
+    try {
+      // Optimistic UI: remove from UI immediately
+      setUploadedFiles(files => files.filter(f => f.id !== fileId));
+      setFilesWithResults(filesWithResults => filesWithResults.filter(fwr => fwr.file.id !== fileId));
+
+      // 1. Delete associated lab results
+      await supabase
+        .from("lab_results")
+        .delete()
+        .eq("file_id", fileId);
+
+      // 2. Delete the file metadata
+      await supabase
+        .from("uploaded_files")
+        .delete()
+        .eq("id", fileId);
+
+      // 3. Delete file from storage if possible
+      if (storagePath) {
+        await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+      }
+
+      toast({ title: "File deleted", description: "Your report and all results have been removed." });
+      await fetchFiles();
+    } catch (error: any) {
+      toast({ title: "Delete failed", description: error?.message ?? String(error), variant: "destructive" });
+      // Refetch in case deletion failed to re-sync UI
+      await fetchFiles();
+    }
+  };
+
+  // Utility to extract storage path from file_url
+  const getStoragePathFromUrl = (file_url: string) => {
+    const parts = file_url.split("/");
+    const last = parts[parts.length - 1];
+    if (last.includes("_")) return last; // our upload format: TIMESTAMP_filename
+    return null; // fallback
+  };
+
   // Mock lab results data
   const mockResults: LabResult[] = [
     {
@@ -357,6 +399,14 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                   <span className="text-xs text-gray-400 ml-4">
                     {file.uploaded_at ? new Date(file.uploaded_at).toLocaleString() : ""}
                   </span>
+                  <button
+                    className="ml-2 p-2 rounded hover:bg-red-100 group"
+                    title="Delete"
+                    aria-label="Delete file"
+                    onClick={() => handleDeleteFile(file.id, getStoragePathFromUrl(file.file_url))}
+                  >
+                    <Delete className="w-5 h-5 text-red-500 group-hover:text-red-700 transition" />
+                  </button>
                 </div>
               ))
             )}
