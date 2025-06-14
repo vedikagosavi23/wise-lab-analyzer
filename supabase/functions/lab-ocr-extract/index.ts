@@ -1,5 +1,3 @@
-
-// Enable XHR for OpenAI vision/file fetch support
 import "https://deno.land/x/xhr@0.1.0/mod.ts"
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
@@ -31,8 +29,8 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: 'OpenAI API key not set' }), { status: 500, headers: corsHeaders });
     }
 
-    const prompt = `Extract lab test results in valid JSON format from the uploaded report.
-Return only a JSON array of objects like:
+    // Strongly worded, explicit prompt for OpenAI Vision (improves compliance)
+    const prompt = `Extract all lab test result values from the uploaded medical report as a JSON array, using *strictly* this schema:
 [
   {
     "test_name": "Hemoglobin",
@@ -42,12 +40,13 @@ Return only a JSON array of objects like:
     "interpretation": "Normal"
   }
 ]
-Rules:
-- If a field is missing, output an empty string for it ("").
-- If no results, output an empty array [].
-- Do not include explanations, markdown, or any other text—strictly JSON array only.`;
+Instructions:
+- Return a single valid JSON array, no markdown, titles or extra words.
+- If a field is not present, use an empty string "".
+- If no results, return an empty array [].
+- Do NOT include any explanation, commentary or formatting. Only output the pure JSON array.`;
 
-    // Call OpenAI Vision API with forced JSON response
+    // Call OpenAI Vision API with strict JSON output requirement.
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -57,14 +56,13 @@ Rules:
       body: JSON.stringify({
         model: "gpt-4o",
         messages: [
-          { role: "system", content: "You extract structured lab test results from medical reports. Return only a JSON array as described." },
+          { role: "system", content: "You extract only structured lab test result JSON arrays from images or documents as described." },
           { role: "user", content: prompt },
           { role: "user", content: [{ type: "image_url", image_url: { url: file_url } }] }
         ],
         max_tokens: 1800,
-        temperature: 0.2,
-        tools: [],
-        response_format: { type: "json_object" } // Force JSON
+        temperature: 0.1,
+        response_format: { type: "json_object" }
       })
     });
 
@@ -72,26 +70,28 @@ Rules:
     let aiContent: string = "";
     let json: any = [];
     let parseError: string | null = null;
-    // With `response_format: json_object` OpenAI will return an object with likely a single field containing the array, e.g. { "results": [...] }
-    // We'll find the array value inside the object.
+
     try {
       const obj = data?.choices?.[0]?.message?.content
         ? JSON.parse(data.choices[0].message.content)
         : {};
       aiContent = data.choices?.[0]?.message?.content ?? "";
-      // Try to find any top-level array property (for "results" or similar)
+      // Find the first top-level array (in case key name varies)
       let arr: any = null;
       for (const v of Object.values(obj)) {
         if (Array.isArray(v)) arr = v;
       }
+      // If root itself is an array, use it
+      if (Array.isArray(obj)) arr = obj;
       json = arr ?? [];
     } catch (err) {
       parseError = (err as Error).message || String(err);
       json = [];
     }
-    console.log("Raw AI output:", aiContent);
 
-    // If still no valid lab results, log and insert a fallback dummy row
+    console.log("Raw AI output:", typeof aiContent === "string" ? aiContent : JSON.stringify(aiContent));
+
+    // Fallback for empty/blank/format errors
     let insertErrors: string[] = [];
     if (!Array.isArray(json) || json.length === 0) {
       // Insert a fallback "no results" entry for user feedback
@@ -103,7 +103,7 @@ Rules:
         normal_range: "",
         status: "",
         severity: "",
-        explanation: aiContent ? "OCR/AI could not extract valid lab test data from this file." : "No text returned from AI at all.",
+        explanation: aiContent && `${aiContent}`.trim() !== "" ? aiContent : "No text returned from AI at all.",
         recommendations: null,
       });
       if (error) insertErrors.push(error.message);
@@ -111,7 +111,7 @@ Rules:
         JSON.stringify({
           extracted: 0,
           aiContent,
-          parse_debug: "No results extracted; check aiContent for what AI returned.",
+          parse_debug: "No results extracted; check aiContent for AI's raw output.",
           parseError,
           insert_errors: insertErrors,
         }),
@@ -119,7 +119,7 @@ Rules:
       );
     }
 
-    // Normal data insertion
+    // Insert all extracted results as before
     for (const r of json) {
       const { error } = await supabaseClient.from("lab_results").insert({
         file_id,
@@ -144,7 +144,6 @@ Rules:
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    // Ensure error responses always include full context
     let aiContent = undefined;
     let parseError = undefined;
     if (typeof error === "object" && error !== null) {
@@ -158,5 +157,3 @@ Rules:
     }), { status: 500, headers: corsHeaders });
   }
 });
-
-// end of file
