@@ -77,7 +77,7 @@ const Index = () => {
     setIsUploading(true);
     setAnalysisProgress(0);
 
-    // 1. Upload file to Supabase Storage
+    // Upload file to Supabase Storage
     const storagePath = `${Date.now()}_${file.name}`;
     const { data: uploadData, error: uploadErr } = await supabase
       .storage
@@ -89,36 +89,59 @@ const Index = () => {
       return;
     }
 
-    // 2. Get the public URL for the uploaded file
+    // Get public URL for the uploaded file
     const { data: urlData } = supabase
       .storage
       .from(STORAGE_BUCKET)
       .getPublicUrl(storagePath);
     const publicUrl = urlData?.publicUrl;
 
-    // 3. Insert file info into the uploaded_files table
+    // Insert file info into uploaded_files table
     const { data: insertData, error: insertErr } = await supabase
       .from("uploaded_files")
       .insert([
         {
           file_name: file.name,
           file_url: publicUrl,
-          // add user_id here if/when you implement auth!
         },
-      ]);
-    if (insertErr) {
-      toast({ title: "Failed to save file metadata", description: insertErr.message });
+      ])
+      .select()
+      .single();
+    if (insertErr || !insertData) {
+      toast({ title: "Failed to save file metadata", description: insertErr?.message });
       setIsUploading(false);
       return;
     }
 
-    toast({ title: "File uploaded!", description: "File info saved to your database." });
+    toast({ title: "File uploaded!", description: "File info saved." });
+    setAnalysisProgress(25);
 
-    await fetchFiles(); // Refresh list after upload
+    // --------- AI OCR Extraction Step ---------
+    try {
+      setAnalysisProgress(35);
+      const ocrRes = await fetch(
+        `https://wewhxpjjrfnbxbkulgwi.functions.supabase.co/lab-ocr-extract`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file_url: publicUrl, file_id: insertData.id }),
+        }
+      );
+      setAnalysisProgress(70);
+      const ocrResult = await ocrRes.json();
 
-    // (optional) continue mock analysis/demo logic here or reset the UI for the real lab parsing step
-    setIsUploading(false);
+      if (!ocrRes.ok || ocrResult.error) {
+        throw new Error("OCR failed: " + (ocrResult.error || ""));
+      }
+
+      toast({ title: "AI Lab Results Extracted!", description: `${ocrResult.extracted} results found.` });
+    } catch (err: any) {
+      toast({ title: "OCR/AI Analysis failed", description: err?.message ?? String(err) });
+    }
+
     setAnalysisProgress(100);
+    setIsUploading(false);
+    await fetchFiles(); // reload files+results
   };
 
   // Mock lab results data
