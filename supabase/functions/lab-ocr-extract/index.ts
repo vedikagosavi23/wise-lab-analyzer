@@ -13,7 +13,7 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
-    const { file_url, file_id } = await req.json();
+    const { file_url, file_id, ocr_text } = await req.json();
     if (!file_url || !file_id) {
       return new Response(JSON.stringify({ error: "file_url and file_id are required" }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': "application/json" }
@@ -35,33 +35,36 @@ serve(async (req) => {
     }
 
     // --------- 1. OCR EXTRACT IMAGE/REPORT TO TEXT ---------
-    let ocrText = "";
+    let ocrText = ocr_text || "";
     let ocrError: string | null = null;
-    try {
-      const ocrRes = await fetch("https://api.api-ninjas.com/v1/imagetotext", {
-        method: "POST",
-        headers: {
-          "X-Api-Key": apiNinjasKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ url: file_url }),
-      });
 
-      if (!ocrRes.ok) {
-        ocrError = `OCR request failed: ${ocrRes.statusText} (${ocrRes.status})`;
-      } else {
-        const ocrResult = await ocrRes.json();
-        if (Array.isArray(ocrResult) && ocrResult.length > 0) {
-          // OCR API (api-ninjas) returns array of {text: "..."}
-          ocrText = ocrResult.map((x: any) => x.text).join("\n");
-        } else if (ocrResult?.text) {
-          ocrText = ocrResult.text;
+    if (!ocrText) {
+      // Only do OCR if not provided by frontend (Puter.js)
+      try {
+        const ocrRes = await fetch("https://api.api-ninjas.com/v1/imagetotext", {
+          method: "POST",
+          headers: {
+            "X-Api-Key": apiNinjasKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ url: file_url }),
+        });
+
+        if (!ocrRes.ok) {
+          ocrError = `OCR request failed: ${ocrRes.statusText} (${ocrRes.status})`;
         } else {
-          ocrError = "No text extracted from image.";
+          const ocrResult = await ocrRes.json();
+          if (Array.isArray(ocrResult) && ocrResult.length > 0) {
+            ocrText = ocrResult.map((x: any) => x.text).join("\n");
+          } else if (ocrResult?.text) {
+            ocrText = ocrResult.text;
+          } else {
+            ocrError = "No text extracted from image.";
+          }
         }
+      } catch(err) {
+        ocrError = `OCR error: ${err instanceof Error ? err.message : String(err)}`;
       }
-    } catch(err) {
-      ocrError = `OCR error: ${err instanceof Error ? err.message : String(err)}`;
     }
 
     if (!ocrText || ocrText.trim() === "") {

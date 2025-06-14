@@ -121,18 +121,49 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
   toast({ title: "File uploaded!", description: "File info saved." });
   setAnalysisProgress(25);
 
-  // --------- AI Lab OCR Extraction Step (OpenAI Vision via Edge Function) ---------
+  // --------- Client-side OCR (Puter.js) for images ---------
+  let ocrText: string | null = null;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+
+  if (["jpg", "jpeg", "png"].includes(ext) && (window as any).puter?.ai?.img2txt) {
+    try {
+      setAnalysisProgress(35);
+      // Read file as Data URL for puter.js OCR
+      const readAsDataURL = (file: File) =>
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+      const imageDataUrl = await readAsDataURL(file);
+
+      // @ts-ignore - puter global injected by CDN
+      ocrText = await (window as any).puter.ai.img2txt(imageDataUrl);
+    } catch (err) {
+      console.error("Puter.js OCR error:", err);
+      ocrText = null;
+    }
+    setAnalysisProgress(50);
+  }
+
+  // --------- AI Lab OCR Extraction Step (Edge Function) ---------
   try {
-    setAnalysisProgress(35);
+    setAnalysisProgress(ocrText ? 65 : 35);
     const ocrRes = await fetch(
       `https://wewhxpjjrfnbxbkulgwi.functions.supabase.co/lab-ocr-extract`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_url: publicUrl, file_id: insertData.id }),
+        body: JSON.stringify({
+          file_url: publicUrl,
+          file_id: insertData.id,
+          ...(ocrText ? { ocr_text: ocrText } : {}),
+        }),
       }
     );
-    setAnalysisProgress(70);
+    setAnalysisProgress(ocrText ? 85 : 70);
 
     const ocrResult = await ocrRes.json();
 
@@ -154,7 +185,6 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
       description: `${ocrResult.extracted} results found.`,
     });
   } catch (err: any) {
-    // Fallback error
     toast({ title: "OCR/AI Analysis failed", description: err?.message ?? String(err) });
     setIsUploading(false);
     return;
