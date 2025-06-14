@@ -1,6 +1,7 @@
-import "https://deno.land/x/xhr@0.1.0/mod.ts"
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
+
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,13 +26,77 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
     const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
+    const apiNinjasKey = Deno.env.get('API_NINJAS_KEY');
     if (!openAIApiKey) {
       return new Response(JSON.stringify({ error: 'OpenAI API key not set' }), { status: 500, headers: corsHeaders });
     }
+    if (!apiNinjasKey) {
+      return new Response(JSON.stringify({ error: 'API_NINJAS_KEY not set' }), { status: 500, headers: corsHeaders });
+    }
 
-    // 1. Extract detailed lab results as before
+    // --------- 1. OCR EXTRACT IMAGE/REPORT TO TEXT ---------
+    let ocrText = "";
+    let ocrError: string | null = null;
+    try {
+      const ocrRes = await fetch("https://api.api-ninjas.com/v1/imagetotext", {
+        method: "POST",
+        headers: {
+          "X-Api-Key": apiNinjasKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ url: file_url }),
+      });
+
+      if (!ocrRes.ok) {
+        ocrError = `OCR request failed: ${ocrRes.statusText} (${ocrRes.status})`;
+      } else {
+        const ocrResult = await ocrRes.json();
+        if (Array.isArray(ocrResult) && ocrResult.length > 0) {
+          // OCR API (api-ninjas) returns array of {text: "..."}
+          ocrText = ocrResult.map((x: any) => x.text).join("\n");
+        } else if (ocrResult?.text) {
+          ocrText = ocrResult.text;
+        } else {
+          ocrError = "No text extracted from image.";
+        }
+      }
+    } catch(err) {
+      ocrError = `OCR error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    if (!ocrText || ocrText.trim() === "") {
+      // No OCR text found, save error & fallback entry
+      const { error } = await supabaseClient.from("lab_results").insert({
+        file_id,
+        test_name: "No readable lab results found (OCR failed).",
+        value: null,
+        unit: "",
+        normal_range: "",
+        status: "",
+        severity: "",
+        explanation: ocrError ?? "OCR returned no text.",
+        recommendations: null,
+      });
+      await supabaseClient
+        .from("uploaded_files")
+        .update({ summary: ocrError ?? "OCR returned no text." })
+        .eq("id", file_id);
+      return new Response(
+        JSON.stringify({
+          extracted: 0,
+          aiContent: "",
+          summary: ocrError ?? "OCR returned no text.",
+          parse_debug: "No results because OCR returned empty.",
+          parseError: ocrError,
+          insert_errors: error ? [error.message] : [],
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // --------- 2. USE OPENAI: Extract Lab Results FROM OCR TEXT ---------
     const prompt = `
-Extract all lab test result values from the uploaded report, returning ONLY a JSON array of objects as below, each with a concise layman explanation and recommendations:
+Extract all lab test result values from the following OCR-extracted report text, returning ONLY a JSON array of objects as below, each with a concise layman explanation and recommendations:
 
 [
   {
@@ -55,9 +120,12 @@ Instructions:
 - Use empty strings "" where data is missing, and an empty array [] for missing recommendations.
 - If no results, just return [].
 - Again, return only the pure JSON array as described above—absolutely no extra text or formatting.
+
+<<OCR_TEXT_START>>
+${ocrText}
+<<OCR_TEXT_END>>
 `;
 
-    // Call OpenAI Vision API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -68,8 +136,7 @@ Instructions:
         model: "gpt-4o",
         messages: [
           { role: "system", content: "You're an expert in extracting and explaining medical lab test results for patients. You respond only with the required JSON array as defined below, with patient-friendly explanations and simple actionable recommendations for each result." },
-          { role: "user", content: prompt },
-          { role: "user", content: [{ type: "image_url", image_url: { url: file_url } }] }
+          { role: "user", content: prompt }
         ],
         max_tokens: 1800,
         temperature: 0.1,
@@ -99,14 +166,11 @@ Instructions:
       json = [];
     }
 
-    console.log("Raw AI output:", typeof aiContent === "string" ? aiContent : JSON.stringify(aiContent));
-
     // Fallback for empty/blank/format errors
     let insertErrors: string[] = [];
     let summaryText: string = "";
 
     if (!Array.isArray(json) || json.length === 0) {
-      // Insert a fallback "no results" entry for user feedback
       const { error } = await supabaseClient.from("lab_results").insert({
         file_id,
         test_name: "No readable lab results found.",
@@ -118,8 +182,6 @@ Instructions:
         explanation: aiContent && `${aiContent}`.trim() !== "" ? aiContent : "No text returned from AI at all.",
         recommendations: null,
       });
-      if (error) insertErrors.push(error.message);
-      // Generate a summary even for empty/no-results reports
       summaryText = aiContent && `${aiContent}`.trim() !== "" ? "No extractable results. The report could not be interpreted by AI." : "No summary available.";
       // Save summary to uploaded_files
       await supabaseClient
@@ -133,13 +195,13 @@ Instructions:
           summary: summaryText,
           parse_debug: "No results extracted; check aiContent for AI's raw output.",
           parseError,
-          insert_errors: insertErrors,
+          insert_errors: error ? [error.message] : [],
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // 2. Insert all extracted results as before
+    // 3. Insert all extracted results
     for (const r of json) {
       const { error } = await supabaseClient.from("lab_results").insert({
         file_id,
@@ -155,8 +217,7 @@ Instructions:
       if (error) insertErrors.push(error.message);
     }
 
-    // 3. Generate a summary for the whole report via OpenAI
-    // Use only the extracted array, send back for summarization
+    // 4. Generate a summary for the whole report via OpenAI
     let summaryPrompt = `
 Given the following patient lab test results:
 ${JSON.stringify(json, null, 2)}
@@ -183,9 +244,7 @@ Write a single, concise summary for the patient in plain language that gives an 
       });
       summaryData = await summaryResponse.json();
       summaryTextRaw = summaryData?.choices?.[0]?.message?.content?.trim() || "";
-      summaryText = summaryTextRaw.replace(/^\s*["']?|\s*["']?$/g, ""); // Remove wrapping quotes if present
-
-      // Save the summary into the uploaded_files row
+      summaryText = summaryTextRaw.replace(/^\s*["']?|\s*["']?$/g, "");
       await supabaseClient
         .from("uploaded_files")
         .update({ summary: summaryText })
