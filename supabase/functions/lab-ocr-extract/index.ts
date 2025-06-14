@@ -1,3 +1,4 @@
+
 import "https://deno.land/x/xhr@0.1.0/mod.ts"
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
@@ -29,22 +30,33 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: 'OpenAI API key not set' }), { status: 500, headers: corsHeaders });
     }
 
-    // Strongly worded, explicit prompt for OpenAI Vision (improves compliance)
-    const prompt = `Extract all lab test result values from the uploaded medical report as a JSON array, using *strictly* this schema:
+    // Enhanced prompt: force output of fields AND explanations in plain language for each test
+    const prompt = `
+Extract all lab test result values from the uploaded report, returning ONLY a JSON array of objects as below, each with a concise layman explanation and recommendations:
+
 [
   {
     "test_name": "Hemoglobin",
     "value": "12.5",
     "unit": "g/dL",
     "reference_range": "12-16",
-    "interpretation": "Normal"
+    "interpretation": "Normal",
+    "explanation": "Hemoglobin is a protein in red blood cells. Your value is within the healthy range, which means your blood can carry oxygen well.",
+    "recommendations": [
+        "No action needed if you feel well.",
+        "Maintain a balanced diet.",
+        "Check with your doctor during your next visit."
+    ]
   }
 ]
+
 Instructions:
-- Return a single valid JSON array, no markdown, titles or extra words.
-- If a field is not present, use an empty string "".
-- If no results, return an empty array [].
-- Do NOT include any explanation, commentary or formatting. Only output the pure JSON array.`;
+- Output only a valid JSON array, no markdown, headings or commentary.
+- For every test, ALWAYS fill in a short, patient-friendly summary under "explanation", and 1-3 simple health tips in "recommendations".
+- Use empty strings "" where data is missing, and an empty array [] for missing recommendations.
+- If no results, just return [].
+- Again, return only the pure JSON array as described above—absolutely no extra text or formatting.
+`;
 
     // Call OpenAI Vision API with strict JSON output requirement.
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -56,7 +68,7 @@ Instructions:
       body: JSON.stringify({
         model: "gpt-4o",
         messages: [
-          { role: "system", content: "You extract only structured lab test result JSON arrays from images or documents as described." },
+          { role: "system", content: "You're an expert in extracting and explaining medical lab test results for patients. You respond only with the required JSON array as defined below, with patient-friendly explanations and simple actionable recommendations for each result." },
           { role: "user", content: prompt },
           { role: "user", content: [{ type: "image_url", image_url: { url: file_url } }] }
         ],
@@ -81,7 +93,6 @@ Instructions:
       for (const v of Object.values(obj)) {
         if (Array.isArray(v)) arr = v;
       }
-      // If root itself is an array, use it
       if (Array.isArray(obj)) arr = obj;
       json = arr ?? [];
     } catch (err) {
@@ -119,7 +130,7 @@ Instructions:
       );
     }
 
-    // Insert all extracted results as before
+    // Insert all extracted results
     for (const r of json) {
       const { error } = await supabaseClient.from("lab_results").insert({
         file_id,
@@ -129,8 +140,8 @@ Instructions:
         normal_range: r.reference_range ?? "",
         status: r.interpretation ?? "",
         severity: null,
-        explanation: null,
-        recommendations: null,
+        explanation: r.explanation ?? "",
+        recommendations: r.recommendations ?? [],
       });
       if (error) insertErrors.push(error.message);
     }
