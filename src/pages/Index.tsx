@@ -1,11 +1,12 @@
-
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Upload, FileText, Brain, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { toast } from '@/hooks/use-toast';
+import { supabase } from "@/integrations/supabase/client";
+import { Input } from "@/components/ui/input";
+import { toast } from "@/hooks/use-toast";
 
 interface LabResult {
   testName: string;
@@ -18,11 +19,83 @@ interface LabResult {
   recommendations: string[];
 }
 
+const STORAGE_BUCKET = "lab-reports";
+
 const Index = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [results, setResults] = useState<LabResult[]>([]);
   const [showResults, setShowResults] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<Array<{ id: string, file_name: string, file_url: string, uploaded_at: string | null }>>([]);
+
+  useEffect(() => {
+    // On mount, load the uploaded files from Supabase
+    fetchFiles();
+  }, []);
+
+  const fetchFiles = async () => {
+    const { data, error } = await supabase
+      .from('uploaded_files')
+      .select('*')
+      .order('uploaded_at', { ascending: false });
+    if (error) {
+      toast({ title: "Error fetching files", description: error.message });
+      setUploadedFiles([]);
+      return;
+    }
+    setUploadedFiles(data || []);
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    setAnalysisProgress(0);
+
+    // 1. Upload file to Supabase Storage
+    const storagePath = `${Date.now()}_${file.name}`;
+    const { data: uploadData, error: uploadErr } = await supabase
+      .storage
+      .from(STORAGE_BUCKET)
+      .upload(storagePath, file, { cacheControl: "3600", upsert: false });
+    if (uploadErr) {
+      toast({ title: "Failed to upload file", description: uploadErr.message });
+      setIsUploading(false);
+      return;
+    }
+
+    // 2. Get the public URL for the uploaded file
+    const { data: urlData } = supabase
+      .storage
+      .from(STORAGE_BUCKET)
+      .getPublicUrl(storagePath);
+    const publicUrl = urlData?.publicUrl;
+
+    // 3. Insert file info into the uploaded_files table
+    const { data: insertData, error: insertErr } = await supabase
+      .from("uploaded_files")
+      .insert([
+        {
+          file_name: file.name,
+          file_url: publicUrl,
+          // add user_id here if/when you implement auth!
+        },
+      ]);
+    if (insertErr) {
+      toast({ title: "Failed to save file metadata", description: insertErr.message });
+      setIsUploading(false);
+      return;
+    }
+
+    toast({ title: "File uploaded!", description: "File info saved to your database." });
+
+    await fetchFiles(); // Refresh list after upload
+
+    // (optional) continue mock analysis/demo logic here or reset the UI for the real lab parsing step
+    setIsUploading(false);
+    setAnalysisProgress(100);
+  };
 
   // Mock lab results data
   const mockResults: LabResult[] = [
@@ -68,41 +141,6 @@ const Index = () => {
     }
   ];
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsUploading(true);
-    setAnalysisProgress(0);
-    
-    // Simulate OCR and analysis process
-    const steps = [
-      { message: 'Uploading file...', progress: 20 },
-      { message: 'Extracting text with OCR...', progress: 40 },
-      { message: 'Parsing lab values...', progress: 60 },
-      { message: 'Analyzing results...', progress: 80 },
-      { message: 'Generating explanations...', progress: 100 }
-    ];
-
-    for (const step of steps) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setAnalysisProgress(step.progress);
-      toast({
-        title: step.message,
-        description: `Progress: ${step.progress}%`,
-      });
-    }
-
-    setResults(mockResults);
-    setShowResults(true);
-    setIsUploading(false);
-    
-    toast({
-      title: 'Analysis Complete!',
-      description: 'Your lab results have been processed and explained.',
-    });
-  };
-
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case 'Critical': return 'bg-red-100 text-red-800 border-red-200';
@@ -142,58 +180,74 @@ const Index = () => {
           </p>
         </div>
 
-        {!showResults ? (
-          <div className="max-w-2xl mx-auto">
-            {/* Upload Section */}
-            <Card className="mb-8 shadow-lg border-0">
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Upload className="w-6 h-6 mr-2 text-blue-600" />
-                  Upload Your Lab Report
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors">
-                  <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-lg font-medium text-gray-700 mb-2">
-                    Drop your lab report here or click to browse
-                  </p>
-                  <p className="text-sm text-gray-500 mb-4">
-                    Supports PDF and image files (JPG, PNG)
-                  </p>
-                  <input
-                    type="file"
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                    id="file-upload"
-                    disabled={isUploading}
-                  />
-                  <label htmlFor="file-upload">
-                    <Button 
-                      className="cursor-pointer bg-blue-600 hover:bg-blue-700" 
-                      disabled={isUploading}
-                      asChild
-                    >
-                      <span>{isUploading ? 'Processing...' : 'Choose File'}</span>
-                    </Button>
-                  </label>
+        {/* --- UPLOADED FILES LIST (show after the header, always) --- */}
+        <div className="max-w-2xl mx-auto mb-8">
+          <h2 className="text-xl font-bold mb-4">Uploaded Reports</h2>
+          <div className="space-y-2">
+            {uploadedFiles.length === 0 ? (
+              <p className="text-gray-500">No uploaded reports yet.</p>
+            ) : (
+              uploadedFiles.map((file) => (
+                <div key={file.id} className="flex justify-between items-center bg-white rounded p-3 shadow-md mb-2">
+                  <span className="truncate max-w-xs">{file.file_name}</span>
+                  <a
+                    href={file.file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 underline text-sm ml-2"
+                  >
+                    View
+                  </a>
+                  <span className="text-xs text-gray-400 ml-4">
+                    {file.uploaded_at ? new Date(file.uploaded_at).toLocaleString() : ""}
+                  </span>
                 </div>
+              ))
+            )}
+          </div>
+        </div>
 
+        {/* --- UPLOAD SECTION --- */}
+        <div className="max-w-2xl mx-auto">
+          <Card className="mb-8 shadow-lg border-0">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Upload className="w-6 h-6 mr-2 text-blue-600" />
+                Upload Your Lab Report
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors">
+                <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                <p className="text-lg font-medium text-gray-700 mb-2">
+                  Drop your lab report here or click to browse
+                </p>
+                <p className="text-sm text-gray-500 mb-4">
+                  Supports PDF and image files (JPG, PNG)
+                </p>
+                <Input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={handleFileUpload}
+                  disabled={isUploading}
+                />
                 {isUploading && (
                   <div className="mt-6">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium text-gray-700">
-                        Analyzing your report...
+                        Uploading your report...
                       </span>
                       <span className="text-sm text-gray-500">{analysisProgress}%</span>
                     </div>
                     <Progress value={analysisProgress} className="h-2" />
                   </div>
                 )}
-              </CardContent>
-            </Card>
-
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        {!showResults ? (
+          <div className="max-w-2xl mx-auto">
             {/* Features Section */}
             <div className="grid md:grid-cols-3 gap-6">
               <Card className="text-center p-6 shadow-md border-0">
