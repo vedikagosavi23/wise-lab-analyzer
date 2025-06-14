@@ -9,7 +9,80 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
-      [_ in never]: never
+      lab_results: {
+        Row: {
+          created_at: string | null
+          explanation: string | null
+          file_id: string | null
+          id: string
+          normal_range: string | null
+          recommendations: Json | null
+          severity: string | null
+          status: string | null
+          test_name: string
+          unit: string | null
+          value: number | null
+        }
+        Insert: {
+          created_at?: string | null
+          explanation?: string | null
+          file_id?: string | null
+          id?: string
+          normal_range?: string | null
+          recommendations?: Json | null
+          severity?: string | null
+          status?: string | null
+          test_name: string
+          unit?: string | null
+          value?: number | null
+        }
+        Update: {
+          created_at?: string | null
+          explanation?: string | null
+          file_id?: string | null
+          id?: string
+          normal_range?: string | null
+          recommendations?: Json | null
+          severity?: string | null
+          status?: string | null
+          test_name?: string
+          unit?: string | null
+          value?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lab_results_file_id_fkey"
+            columns: ["file_id"]
+            isOneToOne: false
+            referencedRelation: "uploaded_files"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      uploaded_files: {
+        Row: {
+          file_name: string
+          file_url: string
+          id: string
+          uploaded_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          file_name: string
+          file_url: string
+          id?: string
+          uploaded_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          file_name?: string
+          file_url?: string
+          id?: string
+          uploaded_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
