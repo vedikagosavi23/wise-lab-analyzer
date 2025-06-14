@@ -70,92 +70,95 @@ const Index = () => {
     setUploadedFiles(data || []);
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
 
-    setIsUploading(true);
-    setAnalysisProgress(0);
+  setIsUploading(true);
+  setAnalysisProgress(0);
 
-    // Upload file to Supabase Storage
-    const storagePath = `${Date.now()}_${file.name}`;
-    const { data: uploadData, error: uploadErr } = await supabase
-      .storage
-      .from(STORAGE_BUCKET)
-      .upload(storagePath, file, { cacheControl: "3600", upsert: false });
-    if (uploadErr) {
-      toast({ title: "Failed to upload file", description: uploadErr.message });
-      setIsUploading(false);
-      return;
-    }
-
-    // Get public URL for the uploaded file
-    const { data: urlData } = supabase
-      .storage
-      .from(STORAGE_BUCKET)
-      .getPublicUrl(storagePath);
-    const publicUrl = urlData?.publicUrl;
-
-    // Insert file info into uploaded_files table
-    const { data: insertData, error: insertErr } = await supabase
-      .from("uploaded_files")
-      .insert([
-        {
-          file_name: file.name,
-          file_url: publicUrl,
-        },
-      ])
-      .select()
-      .single();
-    if (insertErr || !insertData) {
-      toast({ title: "Failed to save file metadata", description: insertErr?.message });
-      setIsUploading(false);
-      return;
-    }
-
-    toast({ title: "File uploaded!", description: "File info saved." });
-    setAnalysisProgress(25);
-
-    // --------- AI OCR Extraction Step ---------
-    try {
-      setAnalysisProgress(35);
-      const ocrRes = await fetch(
-        `https://wewhxpjjrfnbxbkulgwi.functions.supabase.co/lab-ocr-extract`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file_url: publicUrl, file_id: insertData.id }),
-        }
-      );
-      setAnalysisProgress(70);
-      const ocrResult = await ocrRes.json();
-
-      if (!ocrRes.ok || ocrResult.error) {
-        // Surface full error and any AI output in toast
-        let toastDescription = ocrResult.error
-          ? `${ocrResult.error}${ocrResult.parseError ? ` (${ocrResult.parseError})` : ''}`
-          : "Unknown error";
-        if (ocrResult.aiContent !== undefined && ocrResult.aiContent !== "") {
-          toastDescription += "\n— Raw AI Output —\n" + ocrResult.aiContent;
-        }
-        toast({
-          title: "OCR/AI Analysis failed",
-          description: toastDescription,
-        });
-        setIsUploading(false);
-        return;
-      }
-
-      toast({ title: "AI Lab Results Extracted!", description: `${ocrResult.extracted} results found.` });
-    } catch (err: any) {
-      // Fallback catch (shouldn't trigger in most cases)
-      toast({ title: "OCR/AI Analysis failed", description: err?.message ?? String(err) });
-    }
-
-    setAnalysisProgress(100);
+  // Upload file to Supabase Storage
+  const storagePath = `${Date.now()}_${file.name}`;
+  const { data: uploadData, error: uploadErr } = await supabase
+    .storage
+    .from(STORAGE_BUCKET)
+    .upload(storagePath, file, { cacheControl: "3600", upsert: false });
+  if (uploadErr) {
+    toast({ title: "Failed to upload file", description: uploadErr.message });
     setIsUploading(false);
-    await fetchFiles(); // reload files+results
-  };
+    return;
+  }
+
+  // Get public URL for the uploaded file
+  const { data: urlData } = supabase
+    .storage
+    .from(STORAGE_BUCKET)
+    .getPublicUrl(storagePath);
+  const publicUrl = urlData?.publicUrl;
+
+  // Insert file info into uploaded_files table
+  const { data: insertData, error: insertErr } = await supabase
+    .from("uploaded_files")
+    .insert([
+      {
+        file_name: file.name,
+        file_url: publicUrl,
+      },
+    ])
+    .select()
+    .single();
+  if (insertErr || !insertData) {
+    toast({ title: "Failed to save file metadata", description: insertErr?.message });
+    setIsUploading(false);
+    return;
+  }
+
+  toast({ title: "File uploaded!", description: "File info saved." });
+  setAnalysisProgress(25);
+
+  // --------- AI Lab OCR Extraction Step (OpenAI Vision via Edge Function) ---------
+  try {
+    setAnalysisProgress(35);
+    const ocrRes = await fetch(
+      `https://wewhxpjjrfnbxbkulgwi.functions.supabase.co/lab-ocr-extract`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_url: publicUrl, file_id: insertData.id }),
+      }
+    );
+    setAnalysisProgress(70);
+
+    const ocrResult = await ocrRes.json();
+
+    if (!ocrRes.ok || ocrResult.error) {
+      // Surface error and what the AI returned for debugging
+      let toastDescription = ocrResult.error
+        ? `${ocrResult.error}${ocrResult.parseError ? ` (${ocrResult.parseError})` : ""}`
+        : "Unknown error";
+      if (ocrResult.aiContent !== undefined && ocrResult.aiContent !== "") {
+        toastDescription += "\n— Raw AI Output —\n" + ocrResult.aiContent;
+      }
+      toast({ title: "OCR/AI Analysis failed", description: toastDescription });
+      setIsUploading(false);
+      return;
+    }
+
+    toast({
+      title: "AI Lab Results Extracted!",
+      description: `${ocrResult.extracted} results found.`,
+    });
+  } catch (err: any) {
+    // Fallback error
+    toast({ title: "OCR/AI Analysis failed", description: err?.message ?? String(err) });
+    setIsUploading(false);
+    return;
+  }
+
+  setAnalysisProgress(100);
+  setIsUploading(false);
+  await fetchFiles(); // reload files + results
+};
 
   // Mock lab results data
   const mockResults: LabResult[] = [
