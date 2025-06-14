@@ -70,14 +70,31 @@ serve(async (req) => {
 
     const data = await response.json();
     const aiContent = data?.choices?.[0]?.message?.content ?? "";
-    // quick try to parse (strip markdown, trim, etc)
+
+    // Log the raw AI output for better debugging
+    console.log("Raw AI output:", aiContent);
+
+    // Attempt to parse: robust cleaning of AI output
     let json: any = [];
     try {
-      let clean = aiContent.replace(/```json/g, '').replace(/```/g, '').trim();
-      if (!clean.startsWith('[')) clean = clean.slice(clean.indexOf('['));
-      if (!clean.endsWith(']')) clean = clean.slice(0, clean.lastIndexOf(']')+1);
+      let clean = aiContent;
+
+      // Remove '```json' or '```' with or without spaces, at start and end
+      clean = clean.replace(/```json\s*|```/gi, '');
+      clean = clean.trim();
+
+      // Look for the first '[' and the last ']' to extract the JSON array
+      const firstBracket = clean.indexOf('[');
+      const lastBracket = clean.lastIndexOf(']');
+      if (firstBracket === -1 || lastBracket === -1 || firstBracket >= lastBracket) {
+        throw new Error("Could not locate JSON array in output.");
+      }
+      clean = clean.substring(firstBracket, lastBracket + 1);
+
+      // Final trim and parse
       json = JSON.parse(clean);
     } catch (e) {
+      // Include the AI output in the error for debugging
       return new Response(JSON.stringify({ error: "Could not parse AI output", aiContent }), { status: 500, headers: corsHeaders });
     }
 
@@ -107,6 +124,9 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
+    // Sharp error, log more context
+    console.error('Error in lab-ocr-extract:', error);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
   }
 });
+
